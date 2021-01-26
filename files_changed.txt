@@ -1,0 +1,8 @@
+Added files_changed
+Added extent.h
+Added ext_user_tests.c
+Modified fcntl.h
+Modifies stat.h
+Modified fs.c (bmap(), itrunc(), stati())
+Modified sysfile.c(create(), sys_open())
+Modified Makefile

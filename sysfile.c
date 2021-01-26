@@ -251,7 +251,7 @@ create(char *path, short type, short major, short minor)
   if((ip = dirlookup(dp, name, 0)) != 0){
     iunlockput(dp);
     ilock(ip);
-    if(type == T_FILE && ip->type == T_FILE)
+    if((type == T_FILE && ip->type == T_FILE) || (type == T_EXT && ip->type == T_EXT))
       return ip;
     iunlockput(ip);
     return 0;
@@ -292,11 +292,18 @@ sys_open(void)
 
   if(argstr(0, &path) < 0 || argint(1, &omode) < 0)
     return -1;
+    
 
   begin_op();
 
   if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
+    if(omode & O_EXTENT) {
+      // Creates an extent file if mode O_EXTENT is passed along with O_CREATE
+      ip = create(path, T_EXT, 0, 0);
+    } else {
+      // Else creates a normal file
+      ip = create(path, T_FILE, 0, 0);
+    }
     if(ip == 0){
       end_op();
       return -1;

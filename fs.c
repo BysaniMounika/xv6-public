@@ -369,11 +369,60 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+
+// The first 24 bits are addres
+#define GET_START_BLOCK_ADDR(addr) (addr >> 8)
+// The last byte is the length
+#define GET_EXT_LEN(addr) (addr & 0x00ff)
+// Generate addres from block number and length
+#define GET_EXT(addr,len) (addr << 8 | len)
+
 static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
   struct buf *bp;
+
+  if (ip->type == T_EXT) {
+    // Check if the block is already in use
+    int i = 0;
+    uint length = 0;
+    while(ip->addrs[i]) {
+      uint extLength = GET_EXT_LEN(ip->addrs[i]);
+
+      if (bn >= length && bn < length + extLength) {
+        addr = GET_START_BLOCK_ADDR(ip->addrs[i]) +  bn - length;
+        return addr;
+      }
+
+      length += extLength;
+      i++;
+
+      if (i > NDIRECT) {
+        break;
+      }  
+    }
+  
+    if(i > NDIRECT) {
+      panic("Extent file allocation exceeded\n");
+      return GET_START_BLOCK_ADDR(ip->addrs[i-1]);
+    }
+
+    addr = balloc(ip->dev);
+    //cprintf("%d\n", addr);
+    // Checking if the new block address is contiguos with respect to the previous extent
+    uint len = GET_EXT_LEN(ip->addrs[i-1]);
+
+    if( (addr == GET_START_BLOCK_ADDR(ip->addrs[i-1]) + len)  && len < 0xff) {
+      // If yes and the length of previous extent is less than max length then increment the length of last extent.
+      ip->addrs[i-1]  += 1;
+    } else {
+      // Else add new extent with length 1
+      ip->addrs[i] = GET_EXT(addr, 1); 
+    }
+
+    return addr;
+  }
 
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
@@ -411,6 +460,22 @@ itrunc(struct inode *ip)
   struct buf *bp;
   uint *a;
 
+  // Code to clean Extent files
+  if (ip->type == T_EXT){
+    for(i = 0; i < NDIRECT; i++){
+      if(ip->addrs[i]){
+        uint len = GET_EXT_LEN(ip->addrs[i]);
+        for(j = 0; j < len; j++){
+          bfree(ip->dev, GET_START_BLOCK_ADDR(ip->addrs[i]) + j);
+          //cprintf("%d\n", GET_START_BLOCK_ADDR(ip->addrs[i]) + j);
+        }
+        ip->addrs[i] = 0;
+      }
+    }
+
+    return;
+  }
+
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
@@ -444,6 +509,16 @@ stati(struct inode *ip, struct stat *st)
   st->type = ip->type;
   st->nlink = ip->nlink;
   st->size = ip->size;
+
+  // Get more info for extent files
+  int i = 0;
+  if (st->type == T_EXT){
+    for(i = 0; i < NDIRECT; i++)
+    {
+      st->extents[i].start_block_address = GET_START_BLOCK_ADDR(ip->addrs[i]);
+      st->extents[i].length  = GET_EXT_LEN(ip->addrs[i]);
+    }
+  }
 }
 
 //PAGEBREAK!
@@ -490,10 +565,15 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return devsw[ip->major].write(ip, src, n);
   }
 
+
   if(off > ip->size || off + n < off)
     return -1;
-  if(off + n > MAXFILE*BSIZE)
+  if((off + n > MAXFILE*BSIZE) && (ip->type != T_EXT)) {
+    //cprintf("%d\n", off);
+    //cprintf("%d\n", n);
     return -1;
+  }
+    
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
